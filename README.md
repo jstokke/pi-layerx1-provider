@@ -171,22 +171,26 @@ export LAYERX1_DEFAULT_MAX_TOKENS=65536
 
 The catalog advertises paid-size limits (32k+ output tokens), but the Free
 plan rejects anything above 4,096 output tokens per request with
-`403 plan_upgrade_required` — which is the error you hit. The extension
-handles both plans with the same published models:
+`403 plan_upgrade_required`. The extension handles both plans with the
+same published models — no separate configuration needed:
 
 - **Automatic (default).** When a request is rejected *before producing any
   content*, the extension reads the cap from the gateway message
   ("up to N output tokens", falling back to 4096), retries once under
   that cap, and remembers it for the rest of the session. Paid keys never
   trigger this path, so they keep full limits with zero extra requests.
-  Worst case on Free is one fast 403 + one log line per session.
+  Worst case on Free is one fast 403 + one log line per session:
+
+```text
+  Layer X1: plan output cap detected (4096 tokens) — retrying automatically.
+```
 - **Explicit.** To skip even that first 403, declare the plan up front:
 
 ```bash
 # Clamp every request to the Free-plan cap:
 export LAYERX1_PLAN=free
 
-# ...or pin an exact per-request output ceiling (wins over everything):
+# ...or pin an exact per-request output ceiling:
 export LAYERX1_MAX_TOKENS=4096
 ```
 
