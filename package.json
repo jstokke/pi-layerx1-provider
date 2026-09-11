@@ -1,0 +1,57 @@
+{
+  "name": "pi-layerx1-provider",
+  "version": "0.1.0",
+  "description": "Pi extension that exposes Layer X1's live model catalog as two Pi providers (OpenAI and Anthropic wire formats). Reads the unauthenticated GET /v1/models catalog lazily through Pi's model refresh, with pricing and capability metadata straight from the endpoint.",
+  "license": "MIT",
+  "author": "Joachim Stokke <joachim@stokke.dev>",
+  "type": "module",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jstokke/pi-layerx1-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jstokke/pi-layerx1-provider/issues"
+  },
+  "homepage": "https://github.com/jstokke/pi-layerx1-provider#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-timeout=8000 --test-force-exit src/core.test.mjs src/native-provider.test.mjs src/declarations.test.mjs",
+    "test:ci": "node --test --test-timeout=8000 src/core.test.mjs src/native-provider.test.mjs src/declarations.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@types/node": "^20.19.43",
+    "typescript": "^7.0.2"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "layerx1",
+    "ai-provider",
+    "llm",
+    "coding-agent"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

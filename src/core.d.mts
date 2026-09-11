@@ -1,0 +1,97 @@
+/**
+ * Type declarations for core.mjs.
+ *
+ * The runtime module is plain ES module JavaScript so it can be loaded by
+ * Pi's jiti runtime AND tested directly with `node --test` without any
+ * compile step. These declarations give the .ts entrypoint accurate types
+ * for everything it imports.
+ */
+
+export interface ModelOverrideEntry {
+  /** Positive integer maxTokens, or undefined when not set. */
+  maxTokens?: number;
+  /** Positive integer contextWindow, or undefined when not set. */
+  contextWindow?: number;
+}
+
+/** A normalized entry from Layer X1's /v1/models endpoint. */
+export interface CatalogEntry {
+  id: string;
+  name?: string;
+  ownedBy?: string;
+  contextLength?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  vision?: boolean;
+  pricing?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+}
+
+/** Pi-side model definition produced by toPiModel(). */
+export interface PiModelDefinition {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: ("text" | "image")[];
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  /** Provider-scoped metadata (stamped via `meta`); required by Pi's model runtime. */
+  provider?: string;
+  api?: "openai-completions" | "anthropic-messages";
+  baseUrl?: string;
+}
+
+export const PROVIDER_ROOT: string;
+export const OPENAI_BASE_URL: string;
+export const ANTHROPIC_BASE_URL: string;
+export const DISCOVERY_TIMEOUT_MS: number;
+export const DEFAULT_CONTEXT_WINDOW: number;
+export const DEFAULT_MAX_TOKENS: number;
+export const DEFAULT_MAX_TOKENS_REASONING: number;
+
+export class DiscoveryError extends Error {}
+
+export function resolveApiKey(options?: { env?: Record<string, string | undefined>; authPath?: string }): string | undefined;
+
+export function defaultAuthPath(options?: { env?: Record<string, string | undefined> }): string;
+
+export function getDefaultMaxTokens(options?: { env?: Record<string, string | undefined>; reasoning?: boolean }): number;
+
+export function defaultOverridesPath(options?: { env?: Record<string, string | undefined> }): string;
+
+export function loadModelOverrides(options?: {
+  path?: string;
+  fsImpl?: { readFileSync: (path: string, encoding: string) => string };
+}): Map<string, ModelOverrideEntry>;
+
+export function readStoredApiKey(providerId: string, authPath?: string): string | undefined;
+
+export function fetchCatalog(options?: {
+  url?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<CatalogEntry[]>;
+
+export function parseCatalog(payload: unknown): CatalogEntry[];
+
+/** Provider-scoped metadata Pi requires on every model. */
+export interface PiModelMeta {
+  provider: string;
+  api: "openai-completions" | "anthropic-messages";
+  baseUrl: string;
+}
+
+export function toPiModel(
+  model: CatalogEntry,
+  overrides?: Map<string, ModelOverrideEntry>,
+  defaultMaxTokens?: number,
+  meta?: PiModelMeta
+): PiModelDefinition;
+
+export function toPiModels(
+  models: CatalogEntry[],
+  overrides?: Map<string, ModelOverrideEntry>,
+  defaultMaxTokens?: number,
+  meta?: PiModelMeta
+): PiModelDefinition[];

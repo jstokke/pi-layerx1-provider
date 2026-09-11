@@ -1,0 +1,96 @@
+/**
+ * Type declarations for native-provider.mjs.
+ *
+ * The runtime module is plain ES module JavaScript so it can be loaded by
+ * Pi's jiti runtime AND tested directly with `node --test` without any
+ * compile step. These declarations give the .ts entrypoint accurate types
+ * for everything it imports.
+ */
+
+import type { CatalogEntry, ModelOverrideEntry } from "./core.d.mjs";
+
+/** Minimal shape of the Interaction object Pi passes to `login()`. */
+export interface AuthInteraction {
+  prompt: (opts: {
+    type: "text" | "secret" | "select";
+    message: string;
+    placeholder?: string;
+    options?: Array<{ id: string; label: string }>;
+  }) => Promise<string>;
+  signal?: AbortSignal;
+}
+
+/** Pi passes one of these to `check()` / `resolve()`. */
+export interface ApiKeyCredential {
+  type: "api_key";
+  key: string;
+}
+
+/** Context Pi provides to auth callbacks. Use `unknown` at the API surface
+ * so the runtime `Provider` shape is structurally compatible with the
+ * augmentation in `pi-extension-augment.d.ts`. */
+export type AuthContext = unknown;
+
+/** Context Pi provides to `refreshModels()`. */
+export interface RefreshModelsContext {
+  allowNetwork?: boolean;
+  credential?: ApiKeyCredential;
+  /**
+   * Publish an update to Pi's runtime. Returns false when the update was
+   * cancelled (e.g. signal aborted) — caller should drop the change.
+   */
+  publish: (opts: { update?: () => void; persist?: unknown }) => Promise<boolean>;
+  /** Previously persisted models, if any. */
+  stored?: { models?: unknown[] } | null;
+  signal: AbortSignal;
+}
+
+/** Per-provider options for `createLayerX1Provider`. */
+export interface CreateProviderOptions {
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: "openai-completions" | "anthropic-messages";
+  /** Override for tests. Defaults to core.mjs's fetchCatalog. */
+  fetchCatalog?: (options: {
+    url?: string;
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+    signal?: AbortSignal;
+  }) => Promise<CatalogEntry[]>;
+  loadModelOverridesFn?: () => Map<string, ModelOverrideEntry>;
+  readStoredApiKeyFn?: (providerId: string, authPath?: string) => string | undefined;
+  extraHeaders?: Record<string, string>;
+}
+
+/**
+ * The runtime `Provider` shape pi-coding-agent accepts via
+ * `registerProvider`. Fields used here are only what Layer X1 needs;
+ * Pi ignores anything else.
+ *
+ * `api` plus per-model `provider`/`api`/`baseUrl` stamping and the
+ * `stream`/`streamSimple` delegates are all required: Pi's model runtime
+ * groups models by `provider`, dispatches requests by wire `api`, and uses
+ * the provider's own streamers when no models.json overlay exists.
+ */
+export interface NativeProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: "openai-completions" | "anthropic-messages";
+  headers?: Record<string, string>;
+  auth: {
+    apiKey: {
+      name: string;
+      login: (interaction: AuthInteraction) => Promise<ApiKeyCredential>;
+      check: (args: { ctx: AuthContext; credential?: ApiKeyCredential }) => Promise<{ type: "api_key"; source: string } | undefined>;
+      resolve: (args: { ctx: AuthContext; credential?: ApiKeyCredential }) => Promise<{ auth: { apiKey: string }; source: string } | undefined>;
+    };
+  };
+  getModels: () => unknown[];
+  refreshModels: (context: RefreshModelsContext) => Promise<void>;
+  stream: (model: unknown, context: unknown, options?: unknown) => unknown;
+  streamSimple: (model: unknown, context: unknown, options?: unknown) => unknown;
+}
+
+export function createLayerX1Provider(options: CreateProviderOptions): NativeProvider;
