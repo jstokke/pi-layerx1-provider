@@ -44,6 +44,7 @@ export interface PiModelDefinition {
 export const PROVIDER_ROOT: string;
 export const OPENAI_BASE_URL: string;
 export const ANTHROPIC_BASE_URL: string;
+export const FREE_PLAN_MAX_TOKENS: number;
 export const DISCOVERY_TIMEOUT_MS: number;
 export const DEFAULT_CONTEXT_WINDOW: number;
 export const DEFAULT_MAX_TOKENS: number;
@@ -56,6 +57,20 @@ export function resolveApiKey(options?: { env?: Record<string, string | undefine
 export function defaultAuthPath(options?: { env?: Record<string, string | undefined> }): string;
 
 export function getDefaultMaxTokens(options?: { env?: Record<string, string | undefined>; reasoning?: boolean }): number;
+
+export function parsePositiveIntEnv(env: Record<string, string | undefined>, name: string): number | undefined;
+
+export function getExplicitMaxTokens(options?: { env?: Record<string, string | undefined> }): number | undefined;
+
+export function isFreePlan(options?: { env?: Record<string, string | undefined> }): boolean;
+
+export function resolveOutputCeiling(options?: { env?: Record<string, string | undefined>; learnedCap?: number }): number | undefined;
+
+export function isPlanUpgradeError(value: unknown): boolean;
+
+export function parsePlanCapFromError(value: unknown): number | undefined;
+
+export function applyOutputCeiling(value: number | undefined, ceiling: number | undefined): number | undefined;
 
 export function defaultOverridesPath(options?: { env?: Record<string, string | undefined> }): string;
 

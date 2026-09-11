@@ -56,6 +56,16 @@ export const DEFAULT_MAX_TOKENS = 65536;
  */
 export const DEFAULT_MAX_TOKENS_REASONING = 131072;
 
+/**
+ * Output-token ceiling enforced per request by Layer X1's Free plan
+ * (403 plan_upgrade_required above it). Paid plans accept much larger
+ * limits, so this is never published on models — it is only a request-time
+ * ceiling once a Free plan is detected (via LAYERX1_PLAN=free,
+ * LAYERX1_MAX_TOKENS, or a learned plan_upgrade_required rejection).
+ * Also the fallback when the gateway error does not state the limit.
+ */
+export const FREE_PLAN_MAX_TOKENS = 4096;
+
 /** Startup must stay bounded: single attempt, no meaningful retry delay. */
 export const DISCOVERY_TIMEOUT_MS = 8000;
 
@@ -106,6 +116,96 @@ export function getDefaultMaxTokens({ env = process.env, reasoning = false } = {
   // get a higher ceiling because their thinking budget can consume tens of
   // thousands of tokens before the final answer.
   return reasoning ? DEFAULT_MAX_TOKENS_REASONING : DEFAULT_MAX_TOKENS;
+}
+
+/** Parse a positive-integer env var; missing or garbage → undefined. */
+export function parsePositiveIntEnv(env, name) {
+  const raw = env?.[name];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "" || !/^[0-9]+$/.test(trimmed)) return undefined;
+  const n = Number.parseInt(trimmed, 10);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Explicit per-request output ceiling from LAYERX1_MAX_TOKENS. Unlike
+ * LAYERX1_DEFAULT_MAX_TOKENS (a fallback default used only when the
+ * catalog omits max_output), this caps every request — the escape hatch
+ * for Free-plan keys and for anyone who wants a hard output budget.
+ */
+export function getExplicitMaxTokens({ env = process.env } = {}) {
+  return parsePositiveIntEnv(env, "LAYERX1_MAX_TOKENS");
+}
+
+/** True when LAYERX1_PLAN=free (case-insensitive, surrounding space ok). */
+export function isFreePlan({ env = process.env } = {}) {
+  const raw = env?.LAYERX1_PLAN;
+  return typeof raw === "string" && raw.trim().toLowerCase() === "free";
+}
+
+/**
+ * Effective per-request output ceiling: the lowest of the explicit
+ * LAYERX1_MAX_TOKENS, the Free-plan cap (when LAYERX1_PLAN=free), and a
+ * previously learned plan cap. Undefined means no ceiling — full catalog
+ * limits go out, which is correct for paid plans.
+ */
+export function resolveOutputCeiling({ env = process.env, learnedCap } = {}) {
+  const candidates = [
+    getExplicitMaxTokens({ env }),
+    isFreePlan({ env }) ? FREE_PLAN_MAX_TOKENS : undefined,
+    learnedCap,
+  ].filter((v) => v !== undefined);
+  if (candidates.length === 0) return undefined;
+  return Math.min(...candidates);
+}
+
+/** Human-readable text out of an error-ish value (Error, string, or Pi's
+ * assistant-message object carrying errorMessage). Never includes secrets:
+ * callers only pass gateway-shaped failures, which carry none. */
+function errorText(value) {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
+  if (value && typeof value === "object") {
+    const m = value.errorMessage ?? value.message;
+    if (typeof m === "string") return m;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+/** True when the failure is Layer X1's plan-upgrade rejection. */
+export function isPlanUpgradeError(value) {
+  return errorText(value).includes("plan_upgrade_required");
+}
+
+/**
+ * Learn the plan's output cap from a plan_upgrade_required failure.
+ * Parses "up to N output tokens" from the gateway message so the client
+ * tracks the current Free-plan limit without hardcoding it; falls back to
+ * FREE_PLAN_MAX_TOKENS when the limit isn't stated. Returns undefined for
+ * unrelated errors so callers only ever learn from the real signal.
+ */
+export function parsePlanCapFromError(value) {
+  const text = errorText(value);
+  if (!text.includes("plan_upgrade_required")) return undefined;
+  const match = text.match(/up to\s+([\d,]+)\s+output tokens/i);
+  if (match) {
+    const n = Number.parseInt(match[1].replace(/,/g, ""), 10);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  return FREE_PLAN_MAX_TOKENS;
+}
+
+/** Lower a maxTokens value down to a ceiling; undefined ceiling (or value)
+ * passes through untouched — ceilings only ever shrink, never raise. */
+export function applyOutputCeiling(value, ceiling) {
+  if (ceiling === undefined || value === undefined) return value;
+  return Math.min(value, ceiling);
 }
 
 /** Path to the optional per-model override file (see README). */

@@ -61,6 +61,10 @@ export interface CreateProviderOptions {
   loadModelOverridesFn?: () => Map<string, ModelOverrideEntry>;
   readStoredApiKeyFn?: (providerId: string, authPath?: string) => string | undefined;
   extraHeaders?: Record<string, string>;
+  /** Wire streamer override for tests. Defaults to pi-ai compat. */
+  streamImpl?: (model: unknown, context: unknown, options?: unknown) => unknown;
+  /** Non-tool-path streamer override for tests. Defaults to pi-ai compat. */
+  streamSimpleImpl?: (model: unknown, context: unknown, options?: unknown) => unknown;
 }
 
 /**

@@ -4,6 +4,17 @@ Notes on what changed. Format loosely follows [Keep a Changelog](https://keepach
 
 ## [Unreleased]
 
+### Added
+
+- Free-plan support: requests rejected with `403 plan_upgrade_required`
+  before producing content are retried once under the learned output cap
+  (parsed from the gateway's "up to N output tokens" message, else 4096),
+  remembered per session. Paid keys never hit that path. New escape hatches
+  `LAYERX1_PLAN=free` (clamp to the Free cap from the first request) and
+  `LAYERX1_MAX_TOKENS=N` (explicit per-request output ceiling). The learned
+  cap is intentionally not persisted, so plan upgrades take effect
+  immediately.
+
 ## [0.1.0] - 2026-09-11
 
 ### Added

@@ -16,16 +16,24 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_MAX_TOKENS_REASONING,
   DISCOVERY_TIMEOUT_MS,
+  FREE_PLAN_MAX_TOKENS,
   OPENAI_BASE_URL,
   DiscoveryError,
+  applyOutputCeiling,
   defaultAuthPath,
   defaultOverridesPath,
   fetchCatalog,
   getDefaultMaxTokens,
+  getExplicitMaxTokens,
+  isFreePlan,
+  isPlanUpgradeError,
   loadModelOverrides,
   parseCatalog,
+  parsePlanCapFromError,
+  parsePositiveIntEnv,
   readStoredApiKey,
   resolveApiKey,
+  resolveOutputCeiling,
   toPiModel,
   toPiModels,
 } from "./core.mjs";
@@ -272,6 +280,80 @@ test("loadModelOverrides returns an empty map for missing or malformed files", (
 });
 
 // ---------- pi model meta ----------
+
+// ---------- free-plan output ceiling ----------
+
+test("FREE_PLAN_MAX_TOKENS matches the gateway's free limit", () => {
+  assert.equal(FREE_PLAN_MAX_TOKENS, 4096);
+});
+
+test("parsePositiveIntEnv accepts digits only", () => {
+  assert.equal(parsePositiveIntEnv({ V: "4096" }, "V"), 4096);
+  assert.equal(parsePositiveIntEnv({ V: " 8192 " }, "V"), 8192);
+  assert.equal(parsePositiveIntEnv({}, "V"), undefined);
+  assert.equal(parsePositiveIntEnv({ V: "" }, "V"), undefined);
+  assert.equal(parsePositiveIntEnv({ V: "12.5" }, "V"), undefined);
+  assert.equal(parsePositiveIntEnv({ V: "0" }, "V"), undefined);
+  assert.equal(parsePositiveIntEnv({ V: "abc" }, "V"), undefined);
+});
+
+test("getExplicitMaxTokens reads LAYERX1_MAX_TOKENS", () => {
+  assert.equal(getExplicitMaxTokens({ env: { LAYERX1_MAX_TOKENS: "4096" } }), 4096);
+  assert.equal(getExplicitMaxTokens({ env: {} }), undefined);
+  assert.equal(getExplicitMaxTokens({ env: { LAYERX1_MAX_TOKENS: "nope" } }), undefined);
+});
+
+test("isFreePlan matches LAYERX1_PLAN=free case-insensitively", () => {
+  assert.equal(isFreePlan({ env: { LAYERX1_PLAN: "free" } }), true);
+  assert.equal(isFreePlan({ env: { LAYERX1_PLAN: " Free " } }), true);
+  assert.equal(isFreePlan({ env: { LAYERX1_PLAN: "FREE" } }), true);
+  assert.equal(isFreePlan({ env: {} }), false);
+  assert.equal(isFreePlan({ env: { LAYERX1_PLAN: "pro" } }), false);
+});
+
+test("resolveOutputCeiling takes the lowest known cap, undefined when paid", () => {
+  assert.equal(resolveOutputCeiling({ env: {} }), undefined);
+  assert.equal(resolveOutputCeiling({ env: { LAYERX1_PLAN: "free" } }), 4096);
+  assert.equal(resolveOutputCeiling({ env: { LAYERX1_MAX_TOKENS: "2048" } }), 2048);
+  assert.equal(resolveOutputCeiling({ env: {}, learnedCap: 4096 }), 4096);
+  assert.equal(
+    resolveOutputCeiling({ env: { LAYERX1_PLAN: "free", LAYERX1_MAX_TOKENS: "2048" }, learnedCap: 1024 }),
+    1024
+  );
+  assert.equal(resolveOutputCeiling({ env: { LAYERX1_MAX_TOKENS: "8192" }, learnedCap: 4096 }), 4096);
+});
+
+const PLAN_ERROR =
+  'Error: 403: {"type":"plan_upgrade_required","message":"Free supports up to 4,096 output tokens per request — lower the requested limit or upgrade for larger responses"}';
+
+test("isPlanUpgradeError matches the gateway rejection shape", () => {
+  assert.equal(isPlanUpgradeError(new Error(PLAN_ERROR)), true);
+  assert.equal(isPlanUpgradeError(PLAN_ERROR), true);
+  assert.equal(isPlanUpgradeError({ errorMessage: PLAN_ERROR }), true);
+  assert.equal(isPlanUpgradeError(new Error("Error: 401: bad key")), false);
+  assert.equal(isPlanUpgradeError(""), false);
+  assert.equal(isPlanUpgradeError(undefined), false);
+});
+
+test("parsePlanCapFromError learns the stated limit", () => {
+  assert.equal(parsePlanCapFromError(new Error(PLAN_ERROR)), 4096);
+  assert.equal(
+    parsePlanCapFromError("plan_upgrade_required: up to 8,192 output tokens allowed"),
+    8192
+  );
+  // Limit not stated: fall back to the known free cap.
+  assert.equal(parsePlanCapFromError("plan_upgrade_required"), FREE_PLAN_MAX_TOKENS);
+  // Unrelated errors teach nothing.
+  assert.equal(parsePlanCapFromError(new Error("Error: 429: rate limited")), undefined);
+  assert.equal(parsePlanCapFromError("some other failure"), undefined);
+});
+
+test("applyOutputCeiling only ever shrinks", () => {
+  assert.equal(applyOutputCeiling(32768, 4096), 4096);
+  assert.equal(applyOutputCeiling(1024, 4096), 1024);
+  assert.equal(applyOutputCeiling(32768, undefined), 32768);
+  assert.equal(applyOutputCeiling(undefined, 4096), undefined);
+});
 
 test("toPiModel stamps provider meta when given", () => {
   const [model] = parseCatalog(representativeCatalog());

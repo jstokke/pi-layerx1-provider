@@ -167,6 +167,38 @@ To raise the global default:
 export LAYERX1_DEFAULT_MAX_TOKENS=65536
 ```
 
+### Free plan (`plan_upgrade_required`)
+
+The catalog advertises paid-size limits (32k+ output tokens), but the Free
+plan rejects anything above 4,096 output tokens per request with
+`403 plan_upgrade_required` — which is the error you hit. The extension
+handles both plans with the same published models:
+
+- **Automatic (default).** When a request is rejected *before producing any
+  content*, the extension reads the cap from the gateway message
+  ("up to N output tokens", falling back to 4096), retries once under
+  that cap, and remembers it for the rest of the session. Paid keys never
+  trigger this path, so they keep full limits with zero extra requests.
+  Worst case on Free is one fast 403 + one log line per session.
+- **Explicit.** To skip even that first 403, declare the plan up front:
+
+```bash
+# Clamp every request to the Free-plan cap:
+export LAYERX1_PLAN=free
+
+# ...or pin an exact per-request output ceiling (wins over everything):
+export LAYERX1_MAX_TOKENS=4096
+```
+
+The effective ceiling is the lowest of `LAYERX1_MAX_TOKENS`,
+`LAYERX1_PLAN=free` → 4096, and any learned cap. Reasoning still works
+under a cap — Pi fits the thinking budget inside the smaller limit — but
+long answers may hit `finish_reason="length"` sooner; that is the plan
+cap doing its job, not a bug.
+
+The learned cap is intentionally *not* persisted to disk: upgrading your
+plan takes effect immediately instead of fighting stale state.
+
 ### Per-Model Overrides
 
 Create `~/.pi/agent/layerx1-model-overrides.json` (or under `$PI_CODING_AGENT_DIR`):
@@ -191,6 +223,8 @@ The extension prints concise, actionable diagnostics without ever logging your A
   First-time setup or cleared credentials. Run `/login layerx1` or set `LAYERX1_API_KEY`. Note the catalog still loads — only sending requests needs the key.
 - **`Layer X1: <id> catalog fetch failed: ...`**
   Network or parsing error reaching `/v1/models`. Pi continues using the previously cached catalog, and will retry on the next refresh.
+- **`403 plan_upgrade_required` (Free plan)**
+  Should now be retried automatically — if you still see it, every retry also failed (e.g. capped output still too large for the task). Set `LAYERX1_PLAN=free` to clamp from the first request, break the task into smaller steps, or upgrade the plan.
 
 ---
 

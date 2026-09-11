@@ -24,9 +24,13 @@ import {
   streamSimple as compatStreamSimple,
 } from "@earendil-works/pi-ai/compat";
 import {
+  applyOutputCeiling,
   fetchCatalog as defaultFetchCatalog,
+  isPlanUpgradeError,
   loadModelOverrides as defaultLoadModelOverrides,
+  parsePlanCapFromError,
   readStoredApiKey,
+  resolveOutputCeiling,
   toPiModels,
 } from "./core.mjs";
 
@@ -66,7 +70,166 @@ import {
  * @property {(id: string, authPath?: string) => string | undefined} [readStoredApiKeyFn]
  *   Auth.json reader (defaults to core.mjs readStoredApiKey)
  * @property {Record<string, string>} [extraHeaders]  Extra headers for every request
+ * @property {(model: unknown, context: unknown, options?: unknown) => unknown} [streamImpl]
+ *   Wire streamer (defaults to pi-ai compat). Injectable so tests can fake
+ *   the gateway without HTTP.
+ * @property {(model: unknown, context: unknown, options?: unknown) => unknown} [streamSimpleImpl]
+ *   Same, for the non-tool path.
  */
+
+/**
+ * A stream event carrying user-visible content. The relay buffers everything
+ * else (`start` setup noise) until it knows the request was accepted.
+ */
+function isSubstantiveEvent(event) {
+  return !!event && event.type !== "start" && event.type !== "done" && event.type !== "error";
+}
+
+/** The final assistant message out of a terminal stream event. */
+function terminalMessage(event) {
+  if (!event || typeof event !== "object") return undefined;
+  if (event.type === "error") return event.error;
+  if (event.type === "done") return event.message;
+  return undefined;
+}
+
+/** Lower model/options output limits down to a ceiling; never raises. */
+function clampToCeiling(model, options, ceiling) {
+  if (ceiling === undefined) return { model, options };
+  const nextModel =
+    model && typeof model === "object" && model.maxTokens !== undefined
+      ? { ...model, maxTokens: applyOutputCeiling(model.maxTokens, ceiling) }
+      : model;
+  const nextOptions =
+    options && typeof options === "object" && options.maxTokens !== undefined
+      ? { ...options, maxTokens: applyOutputCeiling(options.maxTokens, ceiling) }
+      : options;
+  return { model: nextModel, options: nextOptions };
+}
+
+/**
+ * Relay an inner wire stream while watching for Free-plan
+ * plan_upgrade_required rejections.
+ *
+ * Events are buffered until the first substantive one (or a terminal
+ * event): if the gateway rejects the request before anything user-visible
+ * was produced, the relay retries once under the learned output ceiling
+ * instead of surfacing the 403 — invisible to the caller. Once content has
+ * flowed, or the retry is spent, events pass through untouched.
+ *
+ * Returns the { asyncIterator, result() } shape Pi consumes. Provider
+ * errors arrive as `error` events (compat never throws them), but a
+ * defensive catch covers setup/transport throws too.
+ *
+ * @param {(ceiling: number | undefined) => unknown} createInner Build (or
+ *   rebuild) the inner stream under a ceiling.
+ * @param {{ ceiling: number | undefined; signal?: AbortSignal;
+ *   onLearnedCap: (cap: number) => void }} opts
+ */
+function relayWithPlanRetry(createInner, { ceiling, signal, onLearnedCap }) {
+  const queue = [];
+  const waiters = [];
+  let finished = false;
+  let resolveFinal;
+  const finalPromise = new Promise((resolve) => {
+    resolveFinal = resolve;
+  });
+  function push(event) {
+    if (finished) return;
+    const waiter = waiters.shift();
+    if (waiter) waiter({ value: event, done: false });
+    else queue.push(event);
+  }
+  function end(finalMessage) {
+    if (finished) return;
+    finished = true;
+    resolveFinal(finalMessage);
+    while (waiters.length > 0) waiters.shift()({ value: undefined, done: true });
+  }
+  (async () => {
+    let currentCeiling = ceiling;
+    let inner = createInner(currentCeiling);
+    let retried = false;
+    let buffered = [];
+    let live = false;
+    for (;;) {
+      let terminal = null;
+      try {
+        for await (const event of inner) {
+          if (event?.type === "done" || event?.type === "error") {
+            terminal = event;
+            break;
+          }
+          if (!live && !isSubstantiveEvent(event)) {
+            buffered.push(event);
+            continue;
+          }
+          if (!live) {
+            live = true;
+            for (const e of buffered) push(e);
+            buffered = [];
+          }
+          push(event);
+        }
+      } catch (err) {
+        terminal = { type: "error", error: err };
+      }
+      let finalMessage = terminalMessage(terminal);
+      if (finalMessage === undefined && typeof inner?.result === "function") {
+        try {
+          finalMessage = await inner.result();
+        } catch {
+          finalMessage = undefined;
+        }
+      }
+      const rejectedByPlan =
+        terminal?.type === "error" &&
+        !live &&
+        !retried &&
+        !(signal?.aborted) &&
+        isPlanUpgradeError(finalMessage ?? terminal?.error);
+      if (rejectedByPlan) {
+        const parsed = parsePlanCapFromError(finalMessage ?? terminal?.error);
+        if (parsed !== undefined) {
+          retried = true;
+          currentCeiling = currentCeiling === undefined ? parsed : Math.min(currentCeiling, parsed);
+          onLearnedCap(currentCeiling);
+          buffered = [];
+          console.error(
+            `Layer X1: plan output cap detected (${parsed} tokens) — retrying automatically. ` +
+              `Set LAYERX1_MAX_TOKENS=${parsed} to skip the retry, or upgrade for larger responses.`
+          );
+          inner = createInner(currentCeiling);
+          continue;
+        }
+      }
+      for (const e of buffered) push(e);
+      buffered = [];
+      if (terminal) push(terminal);
+      end(finalMessage);
+      return;
+    }
+  })();
+  return {
+    // Single-consumer, like Pi's own EventStream: the runtime iterates once
+    // (forwarding to the agent loop) and awaits result() for the final message.
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (queue.length > 0) return Promise.resolve({ value: queue.shift(), done: false });
+          if (finished) return Promise.resolve({ value: undefined, done: true });
+          return new Promise((resolve) => waiters.push(resolve));
+        },
+        return() {
+          return Promise.resolve({ value: undefined, done: true });
+        },
+      };
+    },
+    result() {
+      return finalPromise;
+    },
+  };
+}
 
 /**
  * Resolve the API key for this provider, in the documented order:
@@ -125,7 +288,15 @@ export function createLayerX1Provider(options) {
     loadModelOverridesFn = defaultLoadModelOverrides,
     readStoredApiKeyFn = readStoredApiKey,
     extraHeaders,
+    streamImpl = compatStream,
+    streamSimpleImpl = compatStreamSimple,
   } = options;
+
+  // Plan output cap learned from a plan_upgrade_required rejection (per
+  // provider instance, in memory only). Deliberately not persisted: a plan
+  // upgrade must take effect without clearing stale state, and the worst
+  // case without it is one fast 403 + transparent retry per session.
+  let learnedCap;
 
   // Per-model overrides are read once at provider creation; Pi passes the
   // same Map across refreshModels calls in the same session.
@@ -214,8 +385,39 @@ export function createLayerX1Provider(options) {
     // streamers pick the wire implementation from model.api (which every
     // published model carries) and receive the resolved apiKey/headers
     // through `options`.
-    stream: (model, context, options) => compatStream(model, context, options),
-    streamSimple: (model, context, options) => compatStreamSimple(model, context, options),
+    //
+    // The relay adds Free-plan tolerance: Pi always sends model.maxTokens
+    // as the requested output limit (32k+ from our catalog), which the
+    // Free plan rejects with 403 plan_upgrade_required above 4096. Paid
+    // keys never hit that path, so they behave exactly as before.
+    stream: (model, context, options) =>
+      relayWithPlanRetry(
+        (ceiling) => {
+          const clamped = clampToCeiling(model, options, ceiling);
+          return streamImpl(clamped.model, context, clamped.options);
+        },
+        {
+          ceiling: resolveOutputCeiling({ learnedCap }),
+          signal: options?.signal,
+          onLearnedCap: (cap) => {
+            learnedCap = cap;
+          },
+        }
+      ),
+    streamSimple: (model, context, options) =>
+      relayWithPlanRetry(
+        (ceiling) => {
+          const clamped = clampToCeiling(model, options, ceiling);
+          return streamSimpleImpl(clamped.model, context, clamped.options);
+        },
+        {
+          ceiling: resolveOutputCeiling({ learnedCap }),
+          signal: options?.signal,
+          onLearnedCap: (cap) => {
+            learnedCap = cap;
+          },
+        }
+      ),
     async refreshModels(context) {
       // Offline restore first: Pi runs a cache-only refresh phase at
       // startup (before login and before any network access). Republishing
