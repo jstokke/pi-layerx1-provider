@@ -4,15 +4,15 @@
 
 ## Why
 
-<!-- The motivation: an issue, upstream behaviour, a Command Code catalog change. -->
+<!-- The motivation: an issue, upstream behaviour, a Layer X1 catalog change. -->
 
 ## Public surface
 
 Does this change anything users depend on? Tick what applies, or "none".
 
-- [ ] Provider ids (`command-code`, `command-code-anthropic`)
+- [ ] Provider ids (`layerx1`, `layerx1-anthropic`)
 - [ ] Environment variables
-- [ ] The override file shape (`~/.pi/agent/command-code-model-overrides.json`)
+- [ ] The override file shape (`~/.pi/agent/layerx1-model-overrides.json`)
 - [ ] Model ids, pricing, or capability flags
 - [ ] None
 
@@ -23,6 +23,7 @@ Does this change anything users depend on? Tick what applies, or "none".
 - [ ] `CHANGELOG.md` updated under `[Unreleased]` if user-visible
 - [ ] No secrets in code, tests, logs, error messages, or this description
 
-Untested tiers are worth a note: this has only been exercised against a GOAT
-subscription. If your change touches `/models` handling or enrichment, say what
-you tested against.
+Untested plans are worth a note: Free caps output at 4,096 tokens per
+request, so free-plan behavior (the `plan_upgrade_required` retry path)
+can't be verified from a paid key alone. If your change touches request
+limits or error handling, say what you tested against.

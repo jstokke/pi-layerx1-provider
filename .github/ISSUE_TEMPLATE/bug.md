@@ -12,7 +12,7 @@ A clear description of the bug.
 Steps to reproduce, ideally with a minimal config:
 
 ```bash
-export COMMAND_CODE_API_KEY=...
+export LAYERX1_API_KEY=...
 pi
 # then describe what you did
 ```
@@ -26,14 +26,15 @@ What you expected to happen instead.
 - Pi version (`pi --version`):
 - Node version (`node --version`):
 - OS:
-- `COMMAND_CODE_API_KEY` set? (yes / no — never paste the key itself)
-- `COMMAND_CODE_NO_ENRICHMENT` set?
-- `CMD_ZDR` set?
-- `~/.pi/agent/command-code-enrichment-cache.json` exists? (yes / no / not sure)
-- `~/.pi/agent/command-code-model-overrides.json` exists? (yes / no / not sure)
+- `LAYERX1_API_KEY` set? (yes / no — never paste the key itself)
+- `LAYERX1_PLAN` set? (e.g. `free` / unset)
+- `LAYERX1_MAX_TOKENS` set?
+- `LAYERX1_DEFAULT_MAX_TOKENS` set?
+- `~/.pi/agent/layerx1-model-overrides.json` exists? (yes / no / not sure)
+- Plan tier (Free / paid — Free caps output at 4,096 tokens per request):
 
 ## Logs
 
 Anything relevant from `pi` output — particularly any line starting with
-`Command Code:`. The key itself is never needed for diagnosis; please
+`Layer X1:`. The key itself is never needed for diagnosis; please
 redact it anyway.
