@@ -288,24 +288,53 @@ function asNonNegativeNumber(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+/** In-flight default catalog requests shared by both wire providers. */
+const inFlightCatalogRequests = new Map();
+
 /**
  * Fetch and parse the live catalog. The endpoint is unauthenticated, so no
  * API key is required (or sent). Throws DiscoveryError with a concise,
  * key-free message on HTTP failure, timeout, or malformed body.
+ *
+ * Pi registers the OpenAI and Anthropic wires as separate providers and
+ * refreshes them concurrently. They use the same catalog, so coalesce only
+ * concurrent calls made with the real fetch implementation; injected fetchers
+ * remain fully independent for tests and callers that need isolation.
  */
-export async function fetchCatalog({
-  url = `${PROVIDER_ROOT}/v1/models`,
-  timeoutMs = DISCOVERY_TIMEOUT_MS,
-  fetchImpl = fetch,
-  signal,
-} = {}) {
+export function fetchCatalog(options = {}) {
+  const {
+    url = `${PROVIDER_ROOT}/v1/models`,
+    timeoutMs = DISCOVERY_TIMEOUT_MS,
+    fetchImpl = fetch,
+    signal,
+  } = options;
+  const key = `${url}\u0000${timeoutMs}`;
+  if (fetchImpl !== fetch || signal?.aborted) {
+    return fetchCatalogOnce({ url, timeoutMs, fetchImpl, signal });
+  }
+
+  const existing = inFlightCatalogRequests.get(key);
+  if (existing) return existing;
+
+  const request = fetchCatalogOnce({ url, timeoutMs, fetchImpl, signal });
+  inFlightCatalogRequests.set(key, request);
+  return request.finally(() => {
+    if (inFlightCatalogRequests.get(key) === request) inFlightCatalogRequests.delete(key);
+  });
+}
+
+async function fetchCatalogOnce({ url, timeoutMs, fetchImpl, signal }) {
   const controller = new AbortController();
   const onAbort = () => controller.abort(signal?.reason);
   if (signal) {
     if (signal.aborted) controller.abort(signal.reason);
     else signal.addEventListener("abort", onAbort, { once: true });
   }
-  const timer = setTimeout(() => controller.abort(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(`timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
   let response;
   try {
     response = await fetchImpl(url, {
@@ -313,7 +342,7 @@ export async function fetchCatalog({
       signal: controller.signal,
     });
   } catch (err) {
-    const reason = controller.signal.aborted
+    const reason = timedOut
       ? `request timed out after ${timeoutMs}ms`
       : err instanceof Error
         ? err.message

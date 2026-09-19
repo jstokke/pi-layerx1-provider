@@ -195,6 +195,35 @@ test("fetchCatalog hits the Layer X1 catalog URL by default", async () => {
   assert.equal(seenUrl, "https://api.layerx1.com/v1/models");
 });
 
+test("fetchCatalog coalesces concurrent default requests", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { ok: true, status: 200, json: async () => representativeCatalog() };
+  };
+  try {
+    const [first, second] = await Promise.all([fetchCatalog(), fetchCatalog()]);
+    assert.equal(calls, 1);
+    assert.equal(first.length, second.length);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchCatalog distinguishes caller aborts from its own timeout", async () => {
+  const controller = new AbortController();
+  const pending = fetchCatalog({
+    signal: controller.signal,
+    fetchImpl: async (_url, { signal }) => await new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("caller aborted")), { once: true });
+    }),
+  });
+  controller.abort();
+  await assert.rejects(pending, /caller aborted/);
+});
+
 test("fetchCatalog throws DiscoveryError on HTTP failure without leaking a key", async () => {
   await assert.rejects(
     fetchCatalog({ fetchImpl: okFetch({}) }).then(
